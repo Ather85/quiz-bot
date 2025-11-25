@@ -1,0 +1,23 @@
+# Ignore all Python files
+*.py
+
+# But keep main.py
+!main.py
+
+# Ignore environment & secrets
+.env
+
+# Ignore ngrok binaries
+ngrok.exe
+ngrok-v3-stable-windows-amd64/
+
+# Ignore CSV / large data files
+*.csv
+
+# Python cache
+__pycache__/
+
+# IDE / editor files
+*.pyc
+*.pyo
+*.DS_Store
