@@ -1,23 +1,37 @@
-# Ignore all Python files
-*.py
+# --- Python ---
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
 
-# But keep main.py
-!main.py
+# Virtual environment
+venv/
+ENV/
+env/
 
-# Ignore environment & secrets
+# Environment & secrets
 .env
+*.env
 
-# Ignore ngrok binaries
+# --- OS / Editor Files ---
+.DS_Store
+*.swp
+*.swo
+
+# --- Data Files ---
+*.csv
+*.xlsx
+
+# --- Logs ---
+*.log
+
+# --- Ngrok ---
 ngrok.exe
 ngrok-v3-stable-windows-amd64/
 
-# Ignore CSV / large data files
-*.csv
+# --- Selenium / Playwright ---
+playwright/.cache/
+selenium/.cache/
 
-# Python cache
-__pycache__/
-
-# IDE / editor files
-*.pyc
-*.pyo
-*.DS_Store
+# --- Keep ALL Python files (DO NOT IGNORE *.py)
+# (Do NOT add '*.py' here!)
