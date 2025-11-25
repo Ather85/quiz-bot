@@ -10,3 +10,6 @@ pdfplumber
 requests
 beautifulsoup4
 pydantic
+selenium
+undetected-chromedriver
+webdriver-manager
