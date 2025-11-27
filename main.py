@@ -242,42 +242,52 @@ TOOLS_DEFINITION = r"""
 [
   {
     "name": "read_web_page_tool",
-    "description": "Visits a URL with a headless browser and returns all visible text. Use this to get the *text* of the quiz.",
-    "parameters": {"url": "The URL to scrape"}
+    "description": "Visits a URL with a headless browser and returns all visible text.",
+    "parameters": {
+      "url": "The URL to scrape"
+    }
   },
   {
     "name": "find_links_tool",
-    "description": "Visits a URL and returns a JSON list of all links on the page. Use this instead of read_web_page_tool if you need a download link.",
-    "parameters": {"url": "The URL to scrape for links"}
+    "description": "Visits a URL and returns a JSON list of all links on the page.",
+    "parameters": {
+      "url": "The URL to scrape for links"
+    }
   },
   {
     "name": "download_file_tool",
     "description": "Downloads a file from a URL and saves it locally.",
-    "parameters": {"url": "The file URL", "filename": "Local filename"}
+    "parameters": {
+      "url": "The URL of the file to download",
+      "filename": "The local filename to save it as"
+    }
   },
   {
     "name": "read_pdf_tool",
     "description": "Reads all text from a local PDF file.",
-    "parameters": {"filename": "Local PDF filename"}
+    "parameters": {
+      "filename": "The local filename of the PDF to read"
+    }
   },
   {
     "name": "run_python_tool",
-    "description": "Executes Python code. The code MUST read from a predefined variable named 'text_input' if needed. DO NOT embed <last_result> inside code_to_run. Instead ALWAYS pass it via the 'text_input' parameter like: { 'text_input': '<last_result>' }. Example valid code: code_to_run='import json\\n data=json.loads(text_input)\\n print(data[\"email\"])'",
+    "description": "Executes Python code using text_input injected from the previous step. Use text_input='\"<last_result>\"' when needed.",
     "parameters": {
-      "code_to_run": "Python code as a string. Must print the answer.",
-      "text_input": "(Optional) The previous result. ALWAYS pass '<last_result>' here instead of embedding inside code."
+      "code_to_run": "The Python code to execute.",
+      "text_input": "(Optional) Use \"<last_result>\" to pass previous output."
     }
   },
   {
     "name": "submit_answer_tool",
-    "description": "Submits the final answer to the quiz submission URL. Must be the last step.",
+    "description": "Submits the answer JSON to the quiz endpoint.",
     "parameters": {
       "submit_url": "Submission URL",
-      "answer_payload": "Full JSON payload including email, secret, url, answer."
+      "answer_payload": "Complete answer JSON"
     }
   }
 ]
 """
+
 
 # Map tool names to implementations
 TOOLS_MAP = {
