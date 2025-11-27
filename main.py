@@ -227,31 +227,34 @@ TOOLS_DEFINITION = r"""
   },
   {
     "name": "find_links_tool",
-    "description": "Visits a URL and returns a JSON list of all links on the page. Use this *instead of* `read_web_page_tool` if you need to find a file's download URL. Example: [{'text': 'data file', 'href': '.../data.csv'}]",
+    "description": "Visits a URL and returns a JSON list of all links on the page. Use this instead of read_web_page_tool if you need a download link.",
     "parameters": {"url": "The URL to scrape for links"}
   },
   {
     "name": "download_file_tool",
-    "description": "Downloads a file from a URL and saves it locally. Use this for PDFs, CSVs, images, etc.",
-    "parameters": {"url": "The URL of the file to download", "filename": "The local filename to save it as (e.g., 'data.pdf', 'image.png')"}
+    "description": "Downloads a file from a URL and saves it locally.",
+    "parameters": {"url": "The file URL", "filename": "Local filename"}
   },
   {
     "name": "read_pdf_tool",
     "description": "Reads all text from a local PDF file.",
-    "parameters": {"filename": "The local filename of the PDF to read"}
+    "parameters": {"filename": "Local PDF filename"}
   },
   {
     "name": "run_python_tool",
-    "description": "Executes a string of Python code to analyze data or parse text. Use 'pandas' (aliased as 'pd') for CSV/data analysis, or 're' (auto-imported) for text parsing. The code *must* print the final answer to stdout. IMPORTANT: To use the text output from a *previous step* (like `read_web_page_tool` or `read_pdf_tool`), write your code to accept a variable named `text_input`. For example: `code_to_run=\"print(re.search(r'is (\d+)', text_input).group(1))\"`. You must also pass the string `\"<last_result>\"` as the `text_input` value in your 'args'.",
+    "description": "Executes Python code. The code MUST read from a predefined variable named 'text_input' if needed. DO NOT embed <last_result> inside code_to_run. Instead ALWAYS pass it via the 'text_input' parameter like: { 'text_input': '<last_result>' }. Example valid code: code_to_run='import json; data=json.loads(text_input); print(data[\"email\"])'",
     "parameters": {
-        "code_to_run": "The string of Python code to execute.",
-        "text_input": "(Optional) Pass the string `\"<last_result>\"` here to inject the text output of the previous step into your code."
+      "code_to_run": "Python code as a string. Must print the answer.",
+      "text_input": "(Optional) The previous result. ALWAYS pass '<last_result>' here instead of embedding inside code."
     }
   },
   {
     "name": "submit_answer_tool",
-    "description": "Submits the final answer to the quiz submission URL. This MUST be the last step.",
-    "parameters": {"submit_url": "The URL to POST the answer to (found in the quiz text)", "answer_payload": "The *full* JSON payload, including email, secret, url, and the 'answer' field."}
+    "description": "Submits the final answer to the quiz submission URL. Must be the last step.",
+    "parameters": {
+      "submit_url": "Submission URL",
+      "answer_payload": "Full JSON payload including email, secret, url, answer."
+    }
   }
 ]
 """
