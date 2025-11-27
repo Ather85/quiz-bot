@@ -238,7 +238,7 @@ def submit_answer_tool(submit_url: str, answer_payload) -> str:
         return f"Error: Answer submission failed. {e}"
 
 # --- Tool Definitions for the LLM (safe instructions) ---
-TOOLS_DEFINITION = r"""
+TOOLS_DEFINITION = r```
 [
   {
     "name": "read_web_page_tool",
@@ -286,7 +286,7 @@ TOOLS_DEFINITION = r"""
     }
   }
 ]
-"""
+```
 
 
 # Map tool names to implementations
