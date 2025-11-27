@@ -13,3 +13,4 @@ pydantic
 selenium
 undetected-chromedriver
 webdriver-manager
+groq
