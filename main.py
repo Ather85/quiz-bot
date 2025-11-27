@@ -23,9 +23,9 @@ from selenium.webdriver.support import expected_conditions as EC
 from webdriver_manager.chrome import ChromeDriverManager
 
 # --- NEW Imports ---
-import google.generativeai as genai  # The "Brain" - UPDATED
-import pandas as pd             # For data analysis
-import pdfplumber               # For reading PDFs
+from groq import Groq               # The "Brain" - Groq API
+import pandas as pd                 # For data analysis
+import pdfplumber                   # For reading PDFs
 
 # --- 1. Load Configuration ---
 
@@ -65,13 +65,12 @@ print(f"API Key after stripping: {repr(AIPES_API_KEY)}")
 if not all([MY_SECRET_KEY, MY_EMAIL, AIPES_API_KEY, AIPES_BASE_URL]):
     raise ValueError("FATAL ERROR: One or more environment variables (AIPES_API_KEY, AIPES_BASE_URL, etc.) are missing from .env")
 
-# --- Initialize Gemini Client ("The Brain") ---
+# --- Initialize Groq Client ("The Brain") ---
 try:
-    genai.configure(api_key=AIPES_API_KEY)
-    llm_client = genai.GenerativeModel('gemini-2.5-flash')
-    print("Gemini (Google GenerativeAI) client initialized.")
+    llm_client = Groq(api_key=AIPES_API_KEY)
+    print("Groq client initialized successfully.")
 except Exception as e:
-    print(f"Error initializing Gemini client: {e}")
+    print(f"Error initializing Groq client: {e}")
     llm_client = None
 
 # --- 2. Define Data Models ---
@@ -272,7 +271,7 @@ def call_llm_brain(scraped_text: str, current_task_url: str, email: str, secret:
     if llm_client is None:
         return []
 
-    # --- UPDATED SYSTEM PROMPT ---
+    # --- SYSTEM PROMPT ---
     system_prompt = rf"""
         You are an autonomous data analysis agent. Your goal is to solve a quiz.
         You will be given the text from a quiz webpage.
@@ -341,19 +340,18 @@ Please analyze this error and the quiz text, and provide a new, corrected JSON p
     else:
         user_prompt += "Please provide the JSON plan to solve this quiz."
 
-    prompt = f"""
-SYSTEM:
-{system_prompt}
-
-USER:
-{user_prompt}
-"""
-
     print("\n[Brain]: Calling LLM to get a plan...")
 
     try:
-        response = llm_client.generate_content(prompt)
-        plan_json = response.text
+        response = llm_client.chat.completions.create(
+            model="llama-3.1-8b-instant",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ],
+        )
+        
+        plan_json = response.choices[0].message.content
         print(f"\n[Brain DEBUG]: Raw JSON response from LLM:\n{plan_json}\n")
 
         # Strip markdown code blocks if present
@@ -415,11 +413,11 @@ USER:
             elif "tool" in tool_call and "args" in tool_call:
                 tool_name = tool_call["tool"]
                 tool_args = tool_call["args"]
-            elif "tool_code" in tool_call and "parameters" in tool_call:  # ADD THIS
+            elif "tool_code" in tool_call and "parameters" in tool_call:
                 tool_name = tool_call["tool_code"]
                 tool_args = tool_call["parameters"]
-            elif "tool_code" in tool_call and "args" in tool_call:  # ADD THIS LINE
-                tool_name = tool_call["tool_code"]                   # ADD THIS LINE
+            elif "tool_code" in tool_call and "args" in tool_call:
+                tool_name = tool_call["tool_code"]
                 tool_args = tool_call["args"]    
             if tool_name and tool_args is not None:
                 plan.append({"tool": tool_name, "args": tool_args})
