@@ -157,7 +157,7 @@ def read_pdf_tool(filename: str) -> str:
         print(f"[Tool Error]: read_pdf_tool failed: {e}")
         return f"Error: Could not read PDF. {e}"
 
-def run_python_tool(code_to_run: str, text_input: str = None) -> str:
+def (code_to_run: str, text_input: str = None) -> str:
     r"""Executes a string of Python code and returns its print() output.
     
     To use output from previous steps, pass the string "<last_result>" as text_input.
@@ -280,6 +280,11 @@ def call_llm_brain(scraped_text: str, current_task_url: str, email: str, secret:
         - If the page only shows submission instructions with "answer": "anything you want"
         - And there's no mention of CSV, data files, cutoffs, or calculations
         - Then just submit a simple placeholder answer like "demo answer" or "placeholder"
+        15. **CUTOFF EXTRACTION**: 
+        - NEVER hardcode cutoff values like `cutoff = 22129`
+        - ALWAYS extract cutoff from the current page text using: 
+         `cutoff_match = re.search(r'Cutoff:\\s*(\\d+)', text_input)`
+         `cutoff = int(cutoff_match.group(1)) if cutoff_match else 0`
         
         **Example for CSV quizzes:**
         ```python
