@@ -45,7 +45,7 @@ if not all([MY_SECRET_KEY, MY_EMAIL, GEMINI_API_KEY]):
 # --- Initialize Gemini Client ("The Brain") ---
 try:
     genai.configure(api_key=GEMINI_API_KEY)
-    llm_client = genai.GenerativeModel('gemini-1.5-flash-latest')  # Correct model name
+    llm_client = genai.GenerativeModel('gemini-2.5-flash')  # Correct model name
     print("Gemini client initialized successfully.")
 except Exception as e:
     print(f"Error initializing Gemini client: {e}")
