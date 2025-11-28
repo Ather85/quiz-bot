@@ -1,17 +1,17 @@
-# main.py — Groq-ready, hardened quiz-bot agent
+# main.py — Groq-ready, hardened quiz-bot agent with improved regex handling
 
-import uvicorn              # The server that runs our app
-import os                   # To access environment variables
-import json                 # For handling JSON data
-import ast                  # safe literal_eval fallback
-import requests             # For downloading files and submitting answers
-import time                 # For any necessary pauses
-import io                   # For capturing print output
-import contextlib           # Used to capture print() output from exec
-import re                   # Import regex for the agent
+import uvicorn
+import os
+import json
+import ast
+import requests
+import time
+import io
+import contextlib
+import re
 import traceback
 
-from dotenv import load_dotenv  # To load our .env file
+from dotenv import load_dotenv
 
 # FastAPI imports
 from fastapi import FastAPI, Request, HTTPException, BackgroundTasks
@@ -27,15 +27,13 @@ from selenium.webdriver.support import expected_conditions as EC
 from webdriver_manager.chrome import ChromeDriverManager
 
 # --- NEW Imports ---
-# Groq client (make sure `groq` is in requirements.txt)
 from groq import Groq
-import pandas as pd             # For data analysis
-import pdfplumber               # For reading PDFs
+import pandas as pd
+import pdfplumber
 
 # --- 1. Load Configuration ---
-load_dotenv(override=True, dotenv_path='.env')  # Load variables from the .env file (local only)
+load_dotenv(override=True, dotenv_path='.env')
 
-# Enhanced debug
 print("=" * 60)
 print("DEBUG: Checking API Key and .env location")
 print("=" * 60)
@@ -45,7 +43,7 @@ print(f".env file exists here: {os.path.exists('.env')}")
 MY_SECRET_KEY = os.getenv("MY_SECRET_KEY")
 MY_EMAIL = os.getenv("MY_EMAIL")
 AIPES_API_KEY = os.getenv("AIPES_API_KEY")
-AIPES_BASE_URL = os.getenv("AIPES_BASE_URL")  # optional for Groq; kept for backwards compatibility
+AIPES_BASE_URL = os.getenv("AIPES_BASE_URL")
 MODEL_NAME = os.getenv("MODEL", "llama-3.1-8b-instant")
 
 print(f"AIPES_API_KEY present: {bool(AIPES_API_KEY)}")
@@ -53,7 +51,6 @@ print(f"AIPES_BASE_URL present: {bool(AIPES_BASE_URL)}")
 print(f"MY_EMAIL present: {bool(MY_EMAIL)}")
 print("=" * 60)
 
-# Minimal required check
 if not all([MY_SECRET_KEY, MY_EMAIL, AIPES_API_KEY]):
     raise ValueError("FATAL ERROR: One or more environment variables (AIPES_API_KEY, MY_EMAIL, MY_SECRET_KEY) are missing.")
 
@@ -174,16 +171,16 @@ def run_python_tool(code_to_run: str, text_input: str = None) -> str:
     print(f"[Tool Call]: run_python_tool(code_snippet_length={len(code_to_run)})")
     
     # CRITICAL FIX: Unescape newlines that LLM might have double-escaped
-    # The LLM sends \\n instead of \n, so we need to decode it
     code_to_run = code_to_run.encode().decode('unicode_escape')
     
     print(f"[Tool Debug]: Code after unescaping (first 200 chars):\n{code_to_run[:200]}")
     
-    # Safety checks to prevent blocking or dangerous calls
+    # Safety checks
     if "input(" in code_to_run:
         err = "Error: Code attempts to call input(), which is not allowed in automated execution."
         print(f"[Tool Error]: {err}")
         return f"Error: Code execution blocked. {err}"
+    
     # Prepare safe globals/locals for exec
     safe_globals = {
         "pd": pd,
@@ -195,7 +192,6 @@ def run_python_tool(code_to_run: str, text_input: str = None) -> str:
     stream = io.StringIO()
     try:
         with contextlib.redirect_stdout(stream):
-            # Execute the user code
             exec(code_to_run, safe_globals, local_scope)
         result = stream.getvalue().strip()
         if not result:
@@ -212,15 +208,12 @@ def submit_answer_tool(submit_url: str, answer_payload) -> str:
     print(f"[Tool Call]: submit_answer_tool(url='{submit_url}', payload_type={type(answer_payload)})")
     try:
         data = None
-        # If payload is a dict already, use it
         if isinstance(answer_payload, dict):
             data = answer_payload
         elif isinstance(answer_payload, str):
-            # Try JSON parse
             try:
                 data = json.loads(answer_payload)
             except Exception:
-                # Fallback: try ast.literal_eval for Python-style dict strings
                 try:
                     data = ast.literal_eval(answer_payload)
                 except Exception as e:
@@ -230,14 +223,12 @@ def submit_answer_tool(submit_url: str, answer_payload) -> str:
             print(f"[Tool Error]: Unsupported answer_payload type: {type(answer_payload)}")
             return f"Error: Unsupported answer_payload type: {type(answer_payload)}"
 
-        # Basic sanity check
         if not isinstance(data, dict):
             return "Error: Submission payload is not a JSON object."
 
         print(f"[Tool Debug]: Submitting payload: {json.dumps(data, indent=2)}")
         response = requests.post(submit_url, json=data, timeout=30)
         
-        # Log response details before raising for status
         print(f"[Tool Debug]: Response status: {response.status_code}")
         print(f"[Tool Debug]: Response body: {response.text[:500]}")
         
@@ -254,7 +245,7 @@ def submit_answer_tool(submit_url: str, answer_payload) -> str:
         print(f"[Tool Error]: submit_answer_tool failed: {e}\n{tb}")
         return f"Error: Answer submission failed. {e}"
 
-# --- Tool Definitions for the LLM (safe instructions) ---
+# --- Tool Definitions for the LLM ---
 TOOLS_DEFINITION = """
 [
   {
@@ -305,8 +296,6 @@ TOOLS_DEFINITION = """
 ]
 """
 
-
-# Map tool names to implementations
 TOOLS_MAP = {
     "read_web_page_tool": read_web_page_tool,
     "find_links_tool": find_links_tool,
@@ -323,7 +312,7 @@ def call_llm_brain(scraped_text: str, current_task_url: str, email: str, secret:
         print("[Brain Error]: LLM client is not initialized.")
         return []
 
-    # Strict system prompt that forbids embedding <last_result> inside code strings
+    # IMPROVED system prompt with better regex guidance
     system_prompt = rf"""
 You are an autonomous tool-using agent solving quiz challenges. Output ONLY valid JSON (no prose, no markdown).
 
@@ -347,12 +336,17 @@ CRITICAL RULES:
    - "url" field = THE QUIZ URL ('{current_task_url}'), NOT the submission endpoint!
    - "answer" field = the actual answer to the quiz question
 7) Keep it simple: read_web_page_tool → run_python_tool (build answer JSON) → submit_answer_tool
+8) REGEX PATTERNS: When extracting data, be flexible with regex patterns:
+   - For plain text like "Secret code is 4122", use: r'Secret code is (\\d+)' or r'code is (\\w+)'
+   - For JSON like {{"secret":"4122"}}, use: r'"secret"\\s*:\\s*"([^"]+)"'
+   - Always check if re.search() returns None before calling .group(1)
+   - Use try/except around regex extractions
 
-Example for a simple quiz:
+Example for Quiz #2 (scraping data):
 [
-  {{"name":"read_web_page_tool","parameters":{{"url":"{current_task_url}"}}}},
-  {{"name":"run_python_tool","parameters":{{"code_to_run":"import json\\nimport re\\n\\n# Extract submission endpoint\\nsubmit_url = re.search(r'POST.*?to (https://[^\\s]+)', text_input).group(1)\\n\\n# Build answer JSON (url field is the QUIZ URL, not submit URL!)\\nanswer = {{\\n    'email': '{email}',\\n    'secret': '{secret}',\\n    'url': '{current_task_url}',\\n    'answer': 'your answer here'\\n}}\\nprint(json.dumps(answer))","text_input":"<last_result>"}}}},
-  {{"name":"submit_answer_tool","parameters":{{"submit_url":"<EXTRACTED_SUBMIT_URL>","answer_payload":"<last_result>"}}}}
+  {{"name":"read_web_page_tool","parameters":{{"url":"https://tds-llm-analysis.s-anand.net/demo-scrape-data?email=24f1000999%40ds.study.iitm.ac.in"}}}},
+  {{"name":"run_python_tool","parameters":{{"code_to_run":"import json\\nimport re\\n\\n# Extract secret code flexibly\\nmatch = re.search(r'[Ss]ecret.*?is\\s+(\\\\d+)', text_input)\\nif not match:\\n    match = re.search(r'[Ss]ecret.*?(\\\\d+)', text_input)\\nif not match:\\n    secret_code = 'unknown'\\nelse:\\n    secret_code = match.group(1)\\n\\n# Build answer JSON\\nanswer = {{\\n    'email': '{email}',\\n    'secret': '{secret}',\\n    'url': '{current_task_url}',\\n    'answer': secret_code\\n}}\\nprint(json.dumps(answer))","text_input":"<last_result>"}}}},
+  {{"name":"submit_answer_tool","parameters":{{"submit_url":"https://tds-llm-analysis.s-anand.net/submit","answer_payload":"<last_result>"}}}}
 ]
 
 When you see previous_error, fix the issue and output a corrected plan.
@@ -361,12 +355,11 @@ Output ONLY the JSON array, nothing else.
 
     user_prompt = f"Here is the quiz text from {current_task_url}:\n---\n{scraped_text}\n---\n"
     if previous_error:
-        user_prompt += f"Last error: {previous_error}\nPlease produce a corrected JSON plan."
+        user_prompt += f"\n\nLast error: {previous_error}\nPlease produce a corrected JSON plan."
 
     print("\n[Brain]: Calling LLM to get a plan...")
 
     try:
-        # call Groq chat API (robust extraction)
         response = llm_client.chat.completions.create(
             model=MODEL_NAME,
             messages=[
@@ -374,23 +367,20 @@ Output ONLY the JSON array, nothing else.
                 {"role": "user", "content": user_prompt}
             ],
         )
-        # Try multiple ways to extract text depending on response shape
+        
         plan_json = None
         try:
-            # common Groq shape: response.choices[0].message.content
             plan_json = getattr(response.choices[0].message, "content", None)
         except Exception:
             plan_json = None
 
         if not plan_json:
-            # try dict-like access
             try:
                 plan_json = response.choices[0].message["content"]
             except Exception:
                 plan_json = None
 
         if not plan_json:
-            # fallback to text or string
             plan_json = getattr(response, "text", None) or str(response)
 
         plan_json = plan_json or ""
@@ -412,7 +402,6 @@ Output ONLY the JSON array, nothing else.
         plan_data = json.loads(plan_json)
     except Exception as e:
         print(f"[Brain Error]: LLM call or JSON parse failed: {e}")
-        # provide as much debug as possible
         try:
             print(f"[Brain Debug Raw Resp]: {response}")
         except Exception:
@@ -424,13 +413,11 @@ Output ONLY the JSON array, nothing else.
     if isinstance(plan_data, list):
         raw_tool_calls = plan_data
     elif isinstance(plan_data, dict):
-        # try to find a key with list
         for k, v in plan_data.items():
             if isinstance(v, list):
                 raw_tool_calls = v
                 break
         if not raw_tool_calls:
-            # if dict-of-tools, convert dict values
             for k in sorted(plan_data.keys()):
                 if isinstance(plan_data[k], dict):
                     raw_tool_calls.append(plan_data[k])
@@ -512,7 +499,7 @@ def solve_quiz_in_background(task_url: str, email: str, secret: str):
                 if tool_name in TOOLS_MAP:
                     tool_function = TOOLS_MAP[tool_name]
 
-                    # Inject last_tool_output recursively into args where '<last_result>' appears
+                    # Inject last_tool_output recursively
                     try:
                         def inject_last_result(data):
                             if isinstance(data, dict):
@@ -617,7 +604,7 @@ def read_root():
     return {"status": "Quiz Bot API is running!"}
 
 # --- 6. Run the Server / Test Mode ---
-TEST_MODE = False  # SET TO True FOR TESTING
+TEST_MODE = False
 TEST_URL = "https://tds-llm-analysis.s-anand.net/demo"
 
 if __name__ == "__main__":
