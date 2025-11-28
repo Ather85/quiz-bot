@@ -1,5 +1,3 @@
-# main.py — Groq-ready, hardened quiz-bot agent with improved regex handling
-
 import uvicorn
 import os
 import json
@@ -312,7 +310,7 @@ def call_llm_brain(scraped_text: str, current_task_url: str, email: str, secret:
         print("[Brain Error]: LLM client is not initialized.")
         return []
 
-    # IMPROVED system prompt with better regex guidance
+    # IMPROVED system prompt with better regex guidance and CRITICAL single-backslash newline rule
     system_prompt = rf"""
 You are an autonomous tool-using agent solving quiz challenges. Output ONLY valid JSON (no prose, no markdown).
 
@@ -324,7 +322,7 @@ The current quiz URL being processed: {current_task_url}
 
 CRITICAL RULES:
 1) Output must be a JSON array of step objects. Each step: {{"name": "tool_name", "parameters": {{...}}}}
-2) For run_python_tool, use \\n for newlines in code_to_run (double backslash n).
+2) NEWLINE RULE: For run_python_tool code_to_run, use SINGLE backslash + n: \\n (NOT double backslash \\\\n)
 3) To pass previous results to Python code, use: "text_input": "<last_result>"
 4) Python code MUST print output using print(). Use json.dumps() for JSON output.
 5) submit_answer_tool must be the LAST step. It needs:
@@ -336,23 +334,28 @@ CRITICAL RULES:
    - "url" field = THE QUIZ URL ('{current_task_url}'), NOT the submission endpoint!
    - "answer" field = the actual answer to the quiz question
 7) Keep it simple: read_web_page_tool → run_python_tool (build answer JSON) → submit_answer_tool
-8) REGEX PATTERNS: When extracting data, be flexible with regex patterns:
+8) REGEX PATTERNS: When extracting data, be flexible and robust:
    - For plain text like "Secret code is 4122", use: r'Secret code is (\\d+)' or r'code is (\\w+)'
    - For JSON like {{"secret":"4122"}}, use: r'"secret"\\s*:\\s*"([^"]+)"'
    - Always check if re.search() returns None before calling .group(1)
    - Use try/except around regex extractions
+   - If initial regex fails, try simpler patterns
 
-Example for Quiz #2 (scraping data from plain text):
+Example for Quiz #2 (scraping plain text data):
 [
-  {{"name":"read_web_page_tool","parameters":{{"url":"https://tds-llm-analysis.s-anand.net/demo-scrape-data?email=24f1000999%40ds.study.iitm.ac.in"}}}},
-  {{"name":"run_python_tool","parameters":{{"code_to_run":"import json\\nimport re\\n\\n# text_input is a plain string like 'Secret code is 4122 and not 5022'\\nmatch = re.search(r'code is (\\\\d+)', text_input)\\nif match:\\n    secret_code = match.group(1)\\nelse:\\n    secret_code = 'unknown'\\n\\nanswer = {{\\n    'email': '{email}',\\n    'secret': '{secret}',\\n    'url': '{current_task_url}',\\n    'answer': secret_code\\n}}\\nprint(json.dumps(answer))","text_input":"<last_result>"}}}},
-  {{"name":"submit_answer_tool","parameters":{{"submit_url":"https://tds-llm-analysis.s-anand.net/submit","answer_payload":"<last_result>"}}}}
+  {{"name":"read_web_page_tool","parameters":{{"url":"https://example.com/data"}}}},
+  {{"name":"run_python_tool","parameters":{{"code_to_run":"import json\\nimport re\\n\\n# text_input is plain string\\nmatch = re.search(r'code is (\\d+)', text_input)\\nif match:\\n    code = match.group(1)\\nelse:\\n    code = 'NOT_FOUND'\\n\\nanswer = {{'email': '{email}', 'secret': '{secret}', 'url': '{current_task_url}', 'answer': code}}\\nprint(json.dumps(answer))","text_input":"<last_result>"}}}},
+  {{"name":"submit_answer_tool","parameters":{{"submit_url":"https://example.com/submit","answer_payload":"<last_result>"}}}}
 ]
 
-CRITICAL: text_input is ALWAYS a plain string, NEVER try to parse it as JSON with json.loads()! Just use regex directly on the string.
+CRITICAL: 
+- Use SINGLE \\n for newlines in code_to_run, NOT \\\\n
+- text_input is ALWAYS a plain string, NEVER try to parse it as JSON with json.loads()
+- Use regex directly on the string: re.search(pattern, text_input)
+- Always handle regex None case: if match: value = match.group(1); else: value = 'fallback'
 
 When you see previous_error, fix the issue and output a corrected plan.
-Output ONLY the JSON array, nothing else.
+Output ONLY the JSON array, nothing else. NO MARKDOWN FENCES.
 """
 
     user_prompt = f"Here is the quiz text from {current_task_url}:\n---\n{scraped_text}\n---\n"
@@ -388,7 +391,7 @@ Output ONLY the JSON array, nothing else.
         plan_json = plan_json or ""
         print(f"\n[Brain DEBUG]: Raw response extracted (truncated):\n{plan_json[:1000]}\n")
 
-        # Strip code fences
+        # Strip code fences and whitespace
         plan_json = plan_json.strip()
         if plan_json.startswith("```json"):
             plan_json = plan_json[7:]
@@ -400,14 +403,14 @@ Output ONLY the JSON array, nothing else.
 
         print(f"[Brain DEBUG]: Cleaned JSON (first 1000 chars):\n{plan_json[:1000]}\n")
 
-        # Parse JSON
+        # Parse JSON with strict validation
         plan_data = json.loads(plan_json)
+    except json.JSONDecodeError as e:
+        print(f"[Brain Error]: JSON parse failed: {e}")
+        print(f"[Brain Debug]: Attempted to parse:\n{plan_json[:500]}")
+        return []
     except Exception as e:
-        print(f"[Brain Error]: LLM call or JSON parse failed: {e}")
-        try:
-            print(f"[Brain Debug Raw Resp]: {response}")
-        except Exception:
-            pass
+        print(f"[Brain Error]: LLM call failed: {e}")
         return []
 
     # Normalize into a list of tool calls
@@ -488,6 +491,7 @@ def solve_quiz_in_background(task_url: str, email: str, secret: str):
                 print("Failed to get a valid plan from LLM.")
                 last_error = "LLM failed to return a valid plan."
                 retry_count += 1
+                time.sleep(1)
                 continue
 
             last_tool_output = None
@@ -574,6 +578,7 @@ def solve_quiz_in_background(task_url: str, email: str, secret: str):
             else:
                 retry_count += 1
                 print(f"[Agent]: Plan failed. Error: {last_error}")
+                time.sleep(1)
 
         if retry_count > MAX_RETRIES:
             print(f"[Agent]: FAILED to solve quiz {current_task_url} after {MAX_RETRIES + 1} attempts. Aborting chain.")
