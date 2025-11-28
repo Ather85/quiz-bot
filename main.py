@@ -8,6 +8,7 @@ import io
 import contextlib
 import re
 import traceback
+from urllib.parse import urljoin
 
 from dotenv import load_dotenv
 
@@ -24,40 +25,37 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from webdriver_manager.chrome import ChromeDriverManager
 
-# --- NEW Imports ---
-from groq import Groq
-import pandas as pd
-import pdfplumber
+# --- OpenAI Import ---
+from openai import OpenAI
 
 # --- 1. Load Configuration ---
 load_dotenv(override=True, dotenv_path='.env')
 
 print("=" * 60)
-print("DEBUG: Checking API Key and .env location")
+print("DEBUG: Checking Environment Variables")
 print("=" * 60)
 print(f"Current working directory: {os.getcwd()}")
 print(f".env file exists here: {os.path.exists('.env')}")
 
 MY_SECRET_KEY = os.getenv("MY_SECRET_KEY")
 MY_EMAIL = os.getenv("MY_EMAIL")
-AIPES_API_KEY = os.getenv("AIPES_API_KEY")
-AIPES_BASE_URL = os.getenv("AIPES_BASE_URL")
-MODEL_NAME = os.getenv("MODEL", "llama-3.1-8b-instant")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+MODEL_NAME = os.getenv("MODEL", "gpt-4o")
 
-print(f"AIPES_API_KEY present: {bool(AIPES_API_KEY)}")
-print(f"AIPES_BASE_URL present: {bool(AIPES_BASE_URL)}")
+print(f"OPENAI_API_KEY present: {bool(OPENAI_API_KEY)}")
 print(f"MY_EMAIL present: {bool(MY_EMAIL)}")
+print(f"MODEL_NAME: {MODEL_NAME}")
 print("=" * 60)
 
-if not all([MY_SECRET_KEY, MY_EMAIL, AIPES_API_KEY]):
-    raise ValueError("FATAL ERROR: One or more environment variables (AIPES_API_KEY, MY_EMAIL, MY_SECRET_KEY) are missing.")
+if not all([MY_SECRET_KEY, MY_EMAIL, OPENAI_API_KEY]):
+    raise ValueError("FATAL ERROR: One or more environment variables (OPENAI_API_KEY, MY_EMAIL, MY_SECRET_KEY) are missing.")
 
-# --- Initialize Groq Client ("The Brain") ---
+# --- Initialize OpenAI Client ---
 try:
-    llm_client = Groq(api_key=AIPES_API_KEY)
-    print("Groq client initialized successfully.")
+    llm_client = OpenAI(api_key=OPENAI_API_KEY)
+    print("OpenAI client initialized successfully.")
 except Exception as e:
-    print(f"Error initializing Groq client: {e}")
+    print(f"Error initializing OpenAI client: {e}")
     llm_client = None
 
 # --- 2. Define Data Models ---
@@ -67,19 +65,27 @@ class QuizTask(BaseModel):
     url: HttpUrl
 
 # --- 3. The "Toolbox" (Python Functions) ---
-def read_web_page_tool(url: str) -> str:
+def read_web_page_tool(url: str, base_url: str = None) -> str:
     """Visits a URL with a headless browser and returns all visible text."""
     print(f"[Tool Call]: read_web_page_tool(url='{url}')")
+    
+    # FIX: Handle relative URLs
+    if url.startswith('/') and base_url:
+        url = urljoin(base_url, url)
+        print(f"[Tool Fix]: Converted relative URL to: {url}")
+    
     chrome_options = Options()
     chrome_options.add_argument("--headless")
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
+    chrome_options.add_argument("--disable-gpu")
+    chrome_options.add_argument("--window-size=1920,1080")
     service = Service(ChromeDriverManager().install())
     driver = None
     try:
         driver = webdriver.Chrome(service=service, options=chrome_options)
         driver.get(url)
-        WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.TAG_NAME, "body")))
+        WebDriverWait(driver, 15).until(EC.presence_of_element_located((By.TAG_NAME, "body")))
         page_text = driver.find_element(By.TAG_NAME, "body").text
         print(f"[Tool Result]: Scraped text (first 150 chars): {page_text[:150]}...")
         return page_text
@@ -90,82 +96,49 @@ def read_web_page_tool(url: str) -> str:
         if driver:
             driver.quit()
 
-def find_links_tool(url: str) -> str:
-    """Visits a URL and returns a JSON string of all links {'text': '...', 'href': '...'} found on the page."""
-    print(f"[Tool Call]: find_links_tool(url='{url}')")
-    chrome_options = Options()
-    chrome_options.add_argument("--headless")
-    chrome_options.add_argument("--no-sandbox")
-    chrome_options.add_argument("--disable-dev-shm-usage")
-    service = Service(ChromeDriverManager().install())
-    driver = None
-    try:
-        driver = webdriver.Chrome(service=service, options=chrome_options)
-        driver.get(url)
-        WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.TAG_NAME, "a")))
-        links = driver.find_elements(By.TAG_NAME, 'a')
-        link_list = []
-        for link in links:
-            href = link.get_attribute('href')
-            if href:
-                link_list.append({"text": link.text, "href": href})
-        result = json.dumps(link_list)
-        print(f"[Tool Result]: Found {len(link_list)} links. (first 150 chars): {result[:150]}...")
-        return result
-    except Exception as e:
-        print(f"[Tool Error]: find_links_tool failed: {e}")
-        return f"Error: Could not find links. {e}"
-    finally:
-        if driver:
-            driver.quit()
+def extract_submission_url_from_text(text: str) -> str:
+    """Extract submission URL from quiz text more reliably"""
+    patterns = [
+        r'POST.*?to\s+(https?://[^\s<>"\']+/submit)',
+        r'Post your answer to\s+(https?://[^\s<>"\']+)',
+        r'https://[^\s<>"\']+/submit'
+    ]
+    
+    for pattern in patterns:
+        match = re.search(pattern, text, re.IGNORECASE)
+        if match:
+            url = match.group(1)
+            # Ensure it's a complete URL
+            if not url.startswith('http'):
+                url = 'https://' + url
+            print(f"[URL Extract]: Found submission URL: {url}")
+            return url
+    
+    # Default fallback
+    default_url = "https://tds-llm-analysis.s-anand.net/submit"
+    print(f"[URL Extract]: Using default submission URL: {default_url}")
+    return default_url
 
-def download_file_tool(url: str, filename: str) -> str:
-    """Downloads a file from a URL and saves it locally. Handles raw URLs or JSON link lists."""
-    print(f"[Tool Call]: download_file_tool(url='{url}', filename='{filename}')")
-    clean_url = url.strip()
-    if clean_url.startswith("[") or clean_url.startswith("{"):
-        print("[Tool Logic]: Input looks like a JSON string. Attempting to extract URL...")
-        try:
-            data = json.loads(clean_url)
-            if isinstance(data, list) and len(data) > 0 and isinstance(data[0], dict) and "href" in data[0]:
-                clean_url = data[0]["href"]
-            elif isinstance(data, dict) and "href" in data:
-                clean_url = data["href"]
-            print(f"[Tool Logic]: Extracted URL: {clean_url}")
-        except Exception as e:
-            print(f"[Tool Logic]: JSON parsing failed ({e}). Treating as raw string.")
-    try:
-        headers = {'User-Agent': 'Mozilla/5.0'}
-        response = requests.get(clean_url, headers=headers, timeout=30)
-        response.raise_for_status()
-        with open(filename, 'wb') as f:
-            f.write(response.content)
-        print(f"[Tool Result]: File saved as {filename}")
-        return f"Success: File downloaded and saved as {filename}"
-    except Exception as e:
-        print(f"[Tool Error]: download_file_tool failed: {e}")
-        return f"Error: Could not download file. {e}"
-
-def read_pdf_tool(filename: str) -> str:
-    """Reads all text from a local PDF file."""
-    print(f"[Tool Call]: read_pdf_tool(filename='{filename}')")
-    try:
-        full_text = ""
-        with pdfplumber.open(filename) as pdf:
-            for i, page in enumerate(pdf.pages):
-                extracted = page.extract_text() or ""
-                full_text += f"\n--- PDF Page {i+1} ---\n{extracted}"
-        print(f"[Tool Result]: Extracted text (first 150 chars): {full_text[:150]}...")
-        return full_text
-    except Exception as e:
-        print(f"[Tool Error]: read_pdf_tool failed: {e}")
-        return f"Error: Could not read PDF. {e}"
+def smart_data_extraction(text_input: str) -> str:
+    """Extract common patterns from quiz text more reliably"""
+    patterns = [
+        (r'Secret code is\s+(\d+)', 'secret_code'),
+        (r'code is\s+(\d+)', 'code'),
+        (r'answer["\']?\s*[:=]\s*["\']?(\d+)', 'answer_num'),
+        (r'\b(\d{4})\b', 'four_digit'),
+        (r'\b(\d+)\b', 'any_digit')
+    ]
+    
+    for pattern, pattern_type in patterns:
+        match = re.search(pattern, text_input)
+        if match:
+            print(f"[Smart Extract]: Found {pattern_type}: {match.group(1)}")
+            return match.group(1)
+    
+    return "NOT_FOUND"
 
 def run_python_tool(code_to_run: str, text_input: str = None) -> str:
-    r"""Executes a string of Python code and returns its print() output.
-
-    The code MUST NOT call input() or block. The agent must pass any previous results via the `text_input` variable.
-    """
+    r"""Executes a string of Python code and returns its print() output."""
     print(f"[Tool Call]: run_python_tool(code_snippet_length={len(code_to_run)})")
     
     # CRITICAL FIX: Unescape newlines that LLM might have double-escaped
@@ -181,7 +154,6 @@ def run_python_tool(code_to_run: str, text_input: str = None) -> str:
     
     # Prepare safe globals/locals for exec
     safe_globals = {
-        "pd": pd,
         "re": re,
         "json": json,
         "__name__": "__run_python_tool__",
@@ -254,28 +226,6 @@ TOOLS_DEFINITION = """
     }
   },
   {
-    "name": "find_links_tool",
-    "description": "Visits a URL and returns a JSON list of all links on the page.",
-    "parameters": {
-      "url": "The URL to scrape for links"
-    }
-  },
-  {
-    "name": "download_file_tool",
-    "description": "Downloads a file from a URL and saves it locally.",
-    "parameters": {
-      "url": "The URL of the file to download",
-      "filename": "The local filename to save it as"
-    }
-  },
-  {
-    "name": "read_pdf_tool",
-    "description": "Reads all text from a local PDF file.",
-    "parameters": {
-      "filename": "The local filename of the PDF to read"
-    }
-  },
-  {
     "name": "run_python_tool",
     "description": "Executes Python code using text_input injected from the previous step. Use text_input='<last_result>' when needed.",
     "parameters": {
@@ -296,73 +246,88 @@ TOOLS_DEFINITION = """
 
 TOOLS_MAP = {
     "read_web_page_tool": read_web_page_tool,
-    "find_links_tool": find_links_tool,
-    "download_file_tool": download_file_tool,
-    "read_pdf_tool": read_pdf_tool,
     "run_python_tool": run_python_tool,
     "submit_answer_tool": submit_answer_tool,
 }
 
 # --- LLM "Brain" Function ---
 def call_llm_brain(scraped_text: str, current_task_url: str, email: str, secret: str, previous_error: str | None = None) -> list[dict]:
-    """Ask Groq to produce a JSON plan (list of tool calls). Returns parsed list of tool calls or [] on failure."""
+    """Ask OpenAI to produce a JSON plan (list of tool calls)."""
     if llm_client is None:
         print("[Brain Error]: LLM client is not initialized.")
         return []
 
-    # IMPROVED system prompt with better regex guidance and CRITICAL single-backslash newline rule
-    system_prompt = rf"""
-You are an autonomous tool-using agent solving quiz challenges. Output ONLY valid JSON (no prose, no markdown).
+    # SIMPLIFIED system prompt - much more directive
+    system_prompt = f"""
+You are a quiz-solving agent. Output ONLY valid JSON array of steps.
 
-Available tools: {TOOLS_DEFINITION}
+USER INFO:
+- Email: {email}
+- Secret: {secret} 
+- Current Quiz URL: {current_task_url}
 
-Your user's email is: {email}
-Your user's secret is: {secret}
-The current quiz URL being processed: {current_task_url}
+AVAILABLE TOOLS: {TOOLS_DEFINITION}
 
 CRITICAL RULES:
-1) Output must be a JSON array of step objects. Each step: {{"name": "tool_name", "parameters": {{...}}}}
-2) NEWLINE RULE: For run_python_tool code_to_run, use SINGLE backslash + n: \\n (NOT double backslash \\\\n)
-3) To pass previous results to Python code, use: "text_input": "<last_result>"
-4) Python code MUST print output using print(). Use json.dumps() for JSON output.
-5) submit_answer_tool must be the LAST step. It needs:
-   - "submit_url": the submission endpoint (extract from "POST this JSON to ..." text)
-   - "answer_payload": "<last_result>" (pass the JSON from previous step)
-6) IMPORTANT: When building the answer JSON:
-   - "email" field = user's email ('{email}')
-   - "secret" field = user's secret ('{secret}')  
-   - "url" field = THE QUIZ URL ('{current_task_url}'), NOT the submission endpoint!
-   - "answer" field = the actual answer to the quiz question
-7) Keep it simple: read_web_page_tool → run_python_tool (build answer JSON) → submit_answer_tool
-8) REGEX PATTERNS: When extracting data, be flexible and robust:
-   - For plain text like "Secret code is 4122", use: r'Secret code is (\\d+)' or r'code is (\\w+)'
-   - For JSON like {{"secret":"4122"}}, use: r'"secret"\\s*:\\s*"([^"]+)"'
-   - Always check if re.search() returns None before calling .group(1)
-   - Use try/except around regex extractions
-   - If initial regex fails, try simpler patterns
+1. Output MUST be valid JSON array: [{{"name": "tool", "parameters": {{...}}}}]
+2. ALWAYS use this 3-step pattern:
+   - Step 1: read_web_page_tool (get quiz content)
+   - Step 2: run_python_tool (build answer JSON)
+   - Step 3: submit_answer_tool (submit answer)
 
-Example for Quiz #2 (scraping plain text data):
+3. For run_python_tool:
+   - Use text_input="<last_result>" to get previous output
+   - Code MUST print final JSON using print(json.dumps(answer))
+   - Use SINGLE backslash n for newlines: \\n (not double)
+   - text_input is always a STRING, never use json.loads() on it
+
+4. Answer JSON format (ALWAYS use this exact structure):
+{{
+    "email": "{email}",
+    "secret": "{secret}", 
+    "url": "{current_task_url}",
+    "answer": "YOUR_EXTRACTED_ANSWER_HERE"
+}}
+
+5. To extract data from text_input:
+   - Use regex: match = re.search(r'pattern', text_input)
+   - Always handle None case: if match: value = match.group(1); else: value = 'DEFAULT'
+   - For secret codes: r'Secret code is (\\d+)' or r'code is (\\w+)'
+
+6. Extract submission URL from quiz text:
+   - Look for "POST this JSON to https://..." pattern
+   - Default: "https://tds-llm-analysis.s-anand.net/submit"
+
+EXAMPLE FOR DEMO QUIZ:
 [
-  {{"name":"read_web_page_tool","parameters":{{"url":"https://example.com/data"}}}},
-  {{"name":"run_python_tool","parameters":{{"code_to_run":"import json\\nimport re\\n\\n# text_input is plain string\\nmatch = re.search(r'code is (\\d+)', text_input)\\nif match:\\n    code = match.group(1)\\nelse:\\n    code = 'NOT_FOUND'\\n\\nanswer = {{'email': '{email}', 'secret': '{secret}', 'url': '{current_task_url}', 'answer': code}}\\nprint(json.dumps(answer))","text_input":"<last_result>"}}}},
-  {{"name":"submit_answer_tool","parameters":{{"submit_url":"https://example.com/submit","answer_payload":"<last_result>"}}}}
+  {{
+    "name": "read_web_page_tool",
+    "parameters": {{"url": "{current_task_url}"}}
+  }},
+  {{
+    "name": "run_python_tool", 
+    "parameters": {{
+      "code_to_run": "import json\\nimport re\\n\\n# Extract submission URL first\\nsubmit_match = re.search(r'POST.*?to\\\\s+(https?://[^\\\\s<>\\\\\\"\\\\']+/submit)', text_input, re.IGNORECASE)\\nif submit_match:\\n    submission_url = submit_match.group(1)\\nelse:\\n    submission_url = 'https://tds-llm-analysis.s-anand.net/submit'\\n\\n# Extract answer\\nanswer_match = re.search(r'answer[\\\\\\"\\\\']?\\\\s*[:=]\\\\s*[\\\\\\"\\\\']?(\\\\d+)[\\\\\\"\\\\']?', text_input)\\nif answer_match:\\n    answer_val = answer_match.group(1)\\nelse:\\n    answer_val = '123'  # fallback\\n\\n# Build answer JSON\\nanswer = {{'email': '{email}', 'secret': '{secret}', 'url': '{current_task_url}', 'answer': answer_val}}\\nprint(json.dumps(answer))",
+      "text_input": "<last_result>"
+    }}
+  }},
+  {{
+    "name": "submit_answer_tool",
+    "parameters": {{
+      "submit_url": "<last_result>",
+      "answer_payload": "<last_result>"
+    }}
+  }}
 ]
 
-CRITICAL: 
-- Use SINGLE \\n for newlines in code_to_run, NOT \\\\n
-- text_input is ALWAYS a plain string, NEVER try to parse it as JSON with json.loads()
-- Use regex directly on the string: re.search(pattern, text_input)
-- Always handle regex None case: if match: value = match.group(1); else: value = 'fallback'
-
-When you see previous_error, fix the issue and output a corrected plan.
-Output ONLY the JSON array, nothing else. NO MARKDOWN FENCES.
+Output ONLY the JSON array. No other text.
 """
 
-    user_prompt = f"Here is the quiz text from {current_task_url}:\n---\n{scraped_text}\n---\n"
+    user_prompt = f"Quiz text from {current_task_url}:\n---\n{scraped_text}\n---"
     if previous_error:
-        user_prompt += f"\n\nLast error: {previous_error}\nPlease produce a corrected JSON plan."
+        user_prompt += f"\n\nPREVIOUS ERROR: {previous_error}\nFix the above error in your new plan."
 
-    print("\n[Brain]: Calling LLM to get a plan...")
+    print("\n[Brain]: Calling OpenAI to get a plan...")
 
     try:
         response = llm_client.chat.completions.create(
@@ -371,93 +336,43 @@ Output ONLY the JSON array, nothing else. NO MARKDOWN FENCES.
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt}
             ],
+            temperature=0.1,  # Lower temperature for more consistent JSON
         )
         
-        plan_json = None
-        try:
-            plan_json = getattr(response.choices[0].message, "content", None)
-        except Exception:
-            plan_json = None
+        plan_json = response.choices[0].message.content.strip()
+        print(f"[Brain DEBUG]: Raw response:\n{plan_json}\n")
 
-        if not plan_json:
-            try:
-                plan_json = response.choices[0].message["content"]
-            except Exception:
-                plan_json = None
-
-        if not plan_json:
-            plan_json = getattr(response, "text", None) or str(response)
-
-        plan_json = plan_json or ""
-        print(f"\n[Brain DEBUG]: Raw response extracted (truncated):\n{plan_json[:1000]}\n")
-
-        # Strip code fences and whitespace
-        plan_json = plan_json.strip()
+        # Clean JSON - remove markdown code blocks
         if plan_json.startswith("```json"):
             plan_json = plan_json[7:]
-        if plan_json.startswith("```"):
+        elif plan_json.startswith("```"):
             plan_json = plan_json[3:]
         if plan_json.endswith("```"):
             plan_json = plan_json[:-3]
         plan_json = plan_json.strip()
 
-        print(f"[Brain DEBUG]: Cleaned JSON (first 1000 chars):\n{plan_json[:1000]}\n")
-
-        # Parse JSON with strict validation
+        # Parse JSON
         plan_data = json.loads(plan_json)
+        
+        # Convert to our plan format
+        plan = []
+        for step in plan_data:
+            if isinstance(step, dict) and "name" in step and "parameters" in step:
+                plan.append({
+                    "tool": step["name"],
+                    "args": step["parameters"]
+                })
+        
+        print(f"[Brain]: Successfully parsed plan with {len(plan)} steps.")
+        return plan
+        
     except json.JSONDecodeError as e:
         print(f"[Brain Error]: JSON parse failed: {e}")
-        print(f"[Brain Debug]: Attempted to parse:\n{plan_json[:500]}")
+        print(f"[Brain Debug]: Failed to parse:\n{plan_json}")
         return []
     except Exception as e:
-        print(f"[Brain Error]: LLM call failed: {e}")
+        print(f"[Brain Error]: OpenAI call failed: {e}")
         return []
-
-    # Normalize into a list of tool calls
-    raw_tool_calls = []
-    if isinstance(plan_data, list):
-        raw_tool_calls = plan_data
-    elif isinstance(plan_data, dict):
-        for k, v in plan_data.items():
-            if isinstance(v, list):
-                raw_tool_calls = v
-                break
-        if not raw_tool_calls:
-            for k in sorted(plan_data.keys()):
-                if isinstance(plan_data[k], dict):
-                    raw_tool_calls.append(plan_data[k])
-    else:
-        print("[Brain DEBUG]: Plan JSON not list/dict.")
-        return []
-
-    # Convert into normalized plan structure
-    plan = []
-    for tool_call in raw_tool_calls:
-        if not isinstance(tool_call, dict):
-            print(f"[Brain DEBUG]: Skipping non-dict plan item: {tool_call}")
-            continue
-        tool_name = None
-        tool_args = None
-        if "name" in tool_call and "parameters" in tool_call:
-            tool_name = tool_call["name"]
-            tool_args = tool_call["parameters"]
-        elif "tool" in tool_call and "parameters" in tool_call:
-            tool_name = tool_call["tool"]
-            tool_args = tool_call["parameters"]
-        elif "tool" in tool_call and "args" in tool_call:
-            tool_name = tool_call["tool"]
-            tool_args = tool_call["args"]
-        if tool_name and tool_args is not None:
-            plan.append({"tool": tool_name, "args": tool_args})
-        else:
-            print(f"[Brain DEBUG]: Skipping invalid structure: {tool_call}")
-
-    if not plan:
-        print("[Brain Error]: No valid steps found in plan after normalization.")
-        return []
-
-    print(f"[Brain]: Received plan with {len(plan)} steps.")
-    return plan
 
 # --- 4. The "Solver" Agent (Main Loop) ---
 def solve_quiz_in_background(task_url: str, email: str, secret: str):
@@ -478,7 +393,8 @@ def solve_quiz_in_background(task_url: str, email: str, secret: str):
             if last_error:
                 print(f"\n[Agent]: Retrying... (Attempt {retry_count + 1}/{MAX_RETRIES + 1} for this URL)")
 
-            scraped_text = read_web_page_tool(current_task_url)
+            # FIX: Pass base_url for relative URL resolution
+            scraped_text = read_web_page_tool(current_task_url, base_url=current_task_url)
             if scraped_text.startswith("Error:"):
                 print("Failed to scrape initial page. Aborting task.")
                 current_task_url = None
@@ -524,7 +440,11 @@ def solve_quiz_in_background(task_url: str, email: str, secret: str):
                         print(f"[Agent Error] during argument injection: {e}")
 
                     try:
-                        result = tool_function(**tool_args)
+                        # Special handling for read_web_page_tool to pass base_url
+                        if tool_name == "read_web_page_tool" and "url" in tool_args:
+                            result = tool_function(tool_args["url"], base_url=current_task_url)
+                        else:
+                            result = tool_function(**tool_args)
                         last_tool_output = result
 
                         if isinstance(result, str) and result.startswith("Error:"):
