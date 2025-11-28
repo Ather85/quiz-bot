@@ -285,6 +285,14 @@ def call_llm_brain(scraped_text: str, current_task_url: str, email: str, secret:
         - ALWAYS extract cutoff from the current page text using: 
          `cutoff_match = re.search(r'Cutoff:\\s*(\\d+)', text_input)`
          `cutoff = int(cutoff_match.group(1)) if cutoff_match else 0`
+         16. **SECRET CODE EXTRACTION**:
+        - Use exact regex: `r'Secret code is\s*(\d+)'` (NO "The" at the beginning)
+        - Always extract the FIRST number after "Secret code is"
+        17. **CLEAN ANSWER OUTPUT**:
+        - Convert final result to integer: `result = int(filtered[0].sum())`
+        - Print ONLY the final number: `print(result)`
+        - Do NOT print debug info like df.head() in the final answer
+        18. **EMAIL FORMAT**: Always use the exact email parameter "{email}", don't modify it to "your+email"
         
         **Example for CSV quizzes:**
         ```python
