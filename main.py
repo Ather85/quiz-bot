@@ -276,7 +276,11 @@ def call_llm_brain(scraped_text: str, current_task_url: str, email: str, secret:
         11. **Multi-line code only**: Use `\n` for newlines. Never use semicolons in Python code.
         12. **URL extraction**: Use `run_python_tool` to print ONLY the URL string, then pass "<last_result>" to `download_file_tool`.
         13. **SECRET FIELD FIX**: In `submit_answer_tool`, the "secret" field must ALWAYS be "{secret}" (the fixed secret key), never "<last_result>". Only the "answer" field should use "<last_result>".
-
+        14. **DEMO PAGE DETECTION**:
+        - If the page only shows submission instructions with "answer": "anything you want"
+        - And there's no mention of CSV, data files, cutoffs, or calculations
+        - Then just submit a simple placeholder answer like "demo answer" or "placeholder"
+        
         **Example for CSV quizzes:**
         ```python
         import pandas as pd
