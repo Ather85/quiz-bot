@@ -45,7 +45,7 @@ if not all([MY_SECRET_KEY, MY_EMAIL, GEMINI_API_KEY]):
 # --- Initialize Gemini Client ("The Brain") ---
 try:
     genai.configure(api_key=GEMINI_API_KEY)
-    llm_client = genai.GenerativeModel('gemini-2.5-flash')  # Correct model name
+    llm_client = genai.GenerativeModel('gemini-pro')  # CHANGED: Use working model
     print("Gemini client initialized successfully.")
 except Exception as e:
     print(f"Error initializing Gemini client: {e}")
@@ -275,6 +275,7 @@ def call_llm_brain(scraped_text: str, current_task_url: str, email: str, secret:
         - Always convert numeric columns: `pd.to_numeric(df[0], errors='coerce')`
         11. **Multi-line code only**: Use `\n` for newlines. Never use semicolons in Python code.
         12. **URL extraction**: Use `run_python_tool` to print ONLY the URL string, then pass "<last_result>" to `download_file_tool`.
+        13. **SECRET FIELD FIX**: In `submit_answer_tool`, the "secret" field must ALWAYS be "{secret}" (the fixed secret key), never "<last_result>". Only the "answer" field should use "<last_result>".
 
         **Example for CSV quizzes:**
         ```python
@@ -452,6 +453,7 @@ def solve_quiz_in_background(task_url: str, email: str, secret: str):
                     try:
                         def inject_last_result(data):
                             if isinstance(data, dict):
+                                # FIX: Only inject into 'answer' field, never 'secret' field
                                 if "answer" in data and data["answer"] == "<last_result>":
                                     converted_answer = last_tool_output
                                     try: 
@@ -463,6 +465,10 @@ def solve_quiz_in_background(task_url: str, email: str, secret: str):
                                             pass
                                     print(f"[Agent]: Injected last tool output ({converted_answer}) into final answer")
                                     data["answer"] = converted_answer
+                                # FIX: Ensure secret field always uses the actual secret
+                                if "secret" in data and data["secret"] == "<last_result>":
+                                    print(f"[Agent]: FIXED - Using actual secret key instead of <last_result>")
+                                    data["secret"] = secret
                                 for key, value in data.items(): 
                                     data[key] = inject_last_result(value)
                             elif isinstance(data, list):
