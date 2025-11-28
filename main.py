@@ -6,6 +6,7 @@ import time                 # For any necessary pauses
 import io                   # For capturing print output
 import contextlib           # Used to capture print() output from exec
 import re                   # Import regex for the agent
+import time 
 
 # FastAPI imports
 from fastapi import FastAPI, Request, HTTPException, BackgroundTasks
@@ -549,6 +550,7 @@ def solve_quiz_in_background(task_url: str, email: str, secret: str):
                     break
             
             if not plan_failed:
+                time.sleep(5)
                 break 
             else:
                 retry_count += 1
