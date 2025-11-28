@@ -157,7 +157,7 @@ def read_pdf_tool(filename: str) -> str:
         print(f"[Tool Error]: read_pdf_tool failed: {e}")
         return f"Error: Could not read PDF. {e}"
 
-def (code_to_run: str, text_input: str = None) -> str:
+def run_python_tool(code_to_run: str, text_input: str = None) -> str:
     r"""Executes a string of Python code and returns its print() output.
     
     To use output from previous steps, pass the string "<last_result>" as text_input.
