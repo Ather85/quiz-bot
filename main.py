@@ -234,11 +234,21 @@ def submit_answer_tool(submit_url: str, answer_payload) -> str:
         if not isinstance(data, dict):
             return "Error: Submission payload is not a JSON object."
 
+        print(f"[Tool Debug]: Submitting payload: {json.dumps(data, indent=2)}")
         response = requests.post(submit_url, json=data, timeout=30)
+        
+        # Log response details before raising for status
+        print(f"[Tool Debug]: Response status: {response.status_code}")
+        print(f"[Tool Debug]: Response body: {response.text[:500]}")
+        
         response.raise_for_status()
         response_json = response.json()
         print(f"[Tool Result]: Submission successful. Response: {response_json}")
         return json.dumps(response_json)
+    except requests.exceptions.HTTPError as e:
+        print(f"[Tool Error]: HTTP Error: {e}")
+        print(f"[Tool Error]: Response was: {response.text if 'response' in locals() else 'No response'}")
+        return f"Error: Answer submission failed. {e}"
     except Exception as e:
         tb = traceback.format_exc()
         print(f"[Tool Error]: submit_answer_tool failed: {e}\n{tb}")
@@ -321,6 +331,7 @@ Available tools: {TOOLS_DEFINITION}
 
 Your user's email is: {email}
 Your user's secret is: {secret}
+The current quiz URL being processed: {current_task_url}
 
 CRITICAL RULES:
 1) Output must be a JSON array of step objects. Each step: {{"name": "tool_name", "parameters": {{...}}}}
@@ -328,16 +339,20 @@ CRITICAL RULES:
 3) To pass previous results to Python code, use: "text_input": "<last_result>"
 4) Python code MUST print output using print(). Use json.dumps() for JSON output.
 5) submit_answer_tool must be the LAST step. It needs:
-   - "submit_url": the submission endpoint
+   - "submit_url": the submission endpoint (extract from "POST this JSON to ..." text)
    - "answer_payload": "<last_result>" (pass the JSON from previous step)
-6) The quiz page tells you what to submit. Read it carefully and construct the answer JSON with the user's email and secret.
-7) Keep it simple: usually just read_web_page_tool → run_python_tool (build answer JSON) → submit_answer_tool
+6) IMPORTANT: When building the answer JSON:
+   - "email" field = user's email ('{email}')
+   - "secret" field = user's secret ('{secret}')  
+   - "url" field = THE QUIZ URL ('{current_task_url}'), NOT the submission endpoint!
+   - "answer" field = the actual answer to the quiz question
+7) Keep it simple: read_web_page_tool → run_python_tool (build answer JSON) → submit_answer_tool
 
-Example for a simple quiz asking for any answer:
+Example for a simple quiz:
 [
   {{"name":"read_web_page_tool","parameters":{{"url":"{current_task_url}"}}}},
-  {{"name":"run_python_tool","parameters":{{"code_to_run":"import json\\nimport re\\n\\n# Extract submission URL from page text\\nsubmit_url = re.search(r'POST.*?(https://[^\\s]+)', text_input).group(1)\\n\\n# Build answer JSON\\nanswer = {{\\n    'email': '{email}',\\n    'secret': '{secret}',\\n    'url': submit_url,\\n    'answer': 'demo answer'\\n}}\\nprint(json.dumps(answer))","text_input":"<last_result>"}}}},
-  {{"name":"submit_answer_tool","parameters":{{"submit_url":"<EXTRACT_FROM_PAGE>","answer_payload":"<last_result>"}}}}
+  {{"name":"run_python_tool","parameters":{{"code_to_run":"import json\\nimport re\\n\\n# Extract submission endpoint\\nsubmit_url = re.search(r'POST.*?to (https://[^\\s]+)', text_input).group(1)\\n\\n# Build answer JSON (url field is the QUIZ URL, not submit URL!)\\nanswer = {{\\n    'email': '{email}',\\n    'secret': '{secret}',\\n    'url': '{current_task_url}',\\n    'answer': 'your answer here'\\n}}\\nprint(json.dumps(answer))","text_input":"<last_result>"}}}},
+  {{"name":"submit_answer_tool","parameters":{{"submit_url":"<EXTRACTED_SUBMIT_URL>","answer_payload":"<last_result>"}}}}
 ]
 
 When you see previous_error, fix the issue and output a corrected plan.
