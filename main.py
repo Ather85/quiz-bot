@@ -291,7 +291,7 @@ def call_llm_brain(scraped_text: str, current_task_url: str, email: str, secret:
     print("\n[Brain]: Calling LLM to get a plan...")
     try:
         response = llm_client.chat.completions.create(
-            model="gpt-4-turbo", 
+            model="gpt-3.5-turbo", 
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt}
