@@ -7,8 +7,6 @@ import io                   # For capturing print output
 import contextlib           # Used to capture print() output from exec
 import re                   # Import regex for the agent
 
-from dotenv import load_dotenv  # To load our .env file
-
 # FastAPI imports
 from fastapi import FastAPI, Request, HTTPException, BackgroundTasks
 from pydantic import BaseModel, HttpUrl
@@ -23,29 +21,34 @@ from selenium.webdriver.support import expected_conditions as EC
 from webdriver_manager.chrome import ChromeDriverManager
 
 # --- NEW Imports ---
-from openai import OpenAI       # The "Brain" (works with AIPipes)
+import google.generativeai as genai  # The "Brain" - Gemini
 import pandas as pd             # For data analysis
 import pdfplumber               # For reading PDFs
 
 # --- 1. Load Configuration ---
-load_dotenv() # Load variables from the .env file
+print("=" * 60)
+print("DEBUG: Checking Environment Variables")
+print("=" * 60)
+
 MY_SECRET_KEY = os.getenv("MY_SECRET_KEY")
 MY_EMAIL = os.getenv("MY_EMAIL")
-AIPES_API_KEY = os.getenv("AIPES_API_KEY")
-AIPES_BASE_URL = os.getenv("AIPES_BASE_URL")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")  # Changed from AIPES_API_KEY
 
-if not all([MY_SECRET_KEY, MY_EMAIL, AIPES_API_KEY, AIPES_BASE_URL]):
-    raise ValueError("FATAL ERROR: One or more environment variables (AIPES_API_KEY, AIPES_BASE_URL, etc.) are missing from .env")
+print(f"GEMINI_API_KEY present: {bool(GEMINI_API_KEY)}")
+print(f"MY_EMAIL present: {bool(MY_EMAIL)}")
+print(f"MY_SECRET_KEY present: {bool(MY_SECRET_KEY)}")
+print("=" * 60)
 
-# --- Initialize OpenAI Client ("The Brain") ---
+if not all([MY_SECRET_KEY, MY_EMAIL, GEMINI_API_KEY]):
+    raise ValueError("FATAL ERROR: Environment variables (GEMINI_API_KEY, MY_EMAIL, MY_SECRET_KEY) are missing.")
+
+# --- Initialize Gemini Client ("The Brain") ---
 try:
-    llm_client = OpenAI(
-        api_key=AIPES_API_KEY,
-        base_url=AIPES_BASE_URL
-    )
-    print(f"LLM client initialized to use custom base URL: {AIPES_BASE_URL}")
+    genai.configure(api_key=GEMINI_API_KEY)
+    llm_client = genai.GenerativeModel('gemini-1.5-flash')  # Correct model name
+    print("Gemini client initialized successfully.")
 except Exception as e:
-    print(f"Error initializing OpenAI client: {e}")
+    print(f"Error initializing Gemini client: {e}")
     llm_client = None
 
 # --- 2. Define Data Models ---
@@ -155,7 +158,11 @@ def read_pdf_tool(filename: str) -> str:
         return f"Error: Could not read PDF. {e}"
 
 def run_python_tool(code_to_run: str, text_input: str = None) -> str:
-    """Executes a string of Python code and returns its print() output."""
+    r"""Executes a string of Python code and returns its print() output.
+    
+    To use output from previous steps, pass the string "<last_result>" as text_input.
+    Example: code_to_run="print(re.search(r'is (\d+)', text_input).group(1))"
+    """
     print(f"[Tool Call]: run_python_tool(code='{code_to_run}')")
     
     local_scope = {"pd": pd, "re": re, "text_input": text_input}
@@ -189,7 +196,7 @@ def submit_answer_tool(submit_url: str, answer_payload: dict) -> str:
         return f"Error: Answer submission failed. {e}"
 
 # --- Tool Definitions for the LLM ---
-TOOLS_DEFINITION = """
+TOOLS_DEFINITION = r"""
 [
   {
     "name": "read_web_page_tool",
@@ -239,71 +246,99 @@ TOOLS_MAP = {
 
 # --- LLM "Brain" Function ---
 def call_llm_brain(scraped_text: str, current_task_url: str, email: str, secret: str, previous_error: str | None = None) -> list[dict]:
-    if not llm_client:
-        return [{"error": "LLM client not initialized"}]
+    if llm_client is None:
+        return []
 
-    # --- UPDATED SYSTEM PROMPT (Added Rule 12) ---
-    system_prompt = f"""
-    You are an autonomous data analysis agent. Your goal is to solve a quiz.
-    You will be given the text from a quiz webpage.
-    You must create a step-by-step plan to solve the quiz.
-    Your plan must be a JSON object or list of tool calls.
-    You have this toolbox available: {TOOLS_DEFINITION}
-    
-    RULES:
-    1. The quiz text will contain the question AND the URL to submit your answer to.
-    2. Your plan *must* end with a call to `submit_answer_tool`.
-    3. The `answer_payload` for `submit_answer_tool` must be a complete JSON object.
-       To pass the final answer, you MUST use the placeholder string "<last_result>".
-       Example:
-       "email": "{email}"
-       "secret": "{secret}"
-       "url": "{current_task_url}"
-       "answer": "<last_result>"
-    4. For `run_python_tool`, the code *must* print the result *to stdout*. Do not just assign to a variable.
-    5. To use the output of a previous step, pass the string \"<last_result>\" as the `text_input` argument in `run_python_tool`. Your Python code will then receive that text in a variable named `text_input`.
-    6. Be smart. If the quiz asks you to parse text, the plan is: [read_web_page_tool, run_python_tool (with `re`, `text_input`, and a `print` statement), submit_answer].
-    7. If the quiz text mentions a file (e.g., "CSV file", "Download this") but you cannot see the full URL, you MUST use `find_links_tool` on the *current task URL* to get a list of all links, then use that to find the correct download URL for `download_file_tool`.
-    8. When using `re` (regex), be robust. The text is human-readable and may have slight variations. Use flags like `re.IGNORECASE` and flexible patterns (like `r'is:? (\d+)'`) to avoid errors.
-    9. If you are given a "previous_error" message, it means your last plan failed. Analyze the error and the original text, then provide a *new*, corrected plan. Do not repeat the same mistake.
-    10. **Expert Tip 1:** If you see a `pandas` error like "Error tokenizing data" or "C error", the CSV is malformed. Do NOT use `error_bad_lines`. Instead, try to fix it by passing parameters to `pd.read_csv()`, such as `header=None`, `delimiter=','`, or `on_bad_lines='skip'`.
-    11. **Expert Tip 2:** When analyzing a CSV or Dataframe, NEVER assume column names (like 'value' or 'cutoff'). Your Python code should ALWAYS print `df.head()` or `df.columns` first to inspect the data structure, and then proceed to filtering in the same script.
-    12. Respond *only* with the JSON. No other text.
-    """
+    # --- UPDATED SYSTEM PROMPT ---
+    system_prompt = rf"""
+        You are an autonomous data analysis agent. Your goal is to solve a quiz.
+        You will be given the text from a quiz webpage.
+        You must create a step-by-step plan to solve the quiz.
+        Your plan must be a JSON object or list of tool calls.
+        You have this toolbox available: {TOOLS_DEFINITION}
 
+        **CRITICAL ANALYSIS RULES:**
+        1. **ALWAYS inspect data first**: Before any calculation, your Python code must print `df.head()` and `df.columns` to see the structure. Never assume column names or data format.
+        2. **SUM vs COUNT**: If a quiz mentions "cutoff" and asks for a calculation, you almost always need to:
+        - Filter rows where values > cutoff
+        - **SUM the remaining values** (use `.sum()`)
+        - **NOT count them** (don't use `len()`)
+        3. **The quiz text will contain the question AND the URL to submit your answer to.**
+        4. **Your plan *must* end with a call to `submit_answer_tool`.**
+        5. **The `answer_payload` for `submit_answer_tool` must use "<last_result>" for the answer value.**
+        6. **For `run_python_tool`, code must print the result to stdout. Don't just assign to a variable.**
+        7. **To use previous step output, pass "<last_result>" as `text_input` in `run_python_tool`.**
+        8. **If you see "Wrong sum of numbers" error**: Your code counted rows instead of summing values. Fix: Use `df[column].sum()` not `len(df)`.
+        9. **Regex patterns must be flexible**: Use `(?i)` for case-insensitive matching and `\s*` for optional whitespace.
+        10. **CSV parsing tips**: 
+        - If parsing fails, try `header=None`, `sep=','`, or `on_bad_lines='skip'`
+        - Always convert numeric columns: `pd.to_numeric(df[0], errors='coerce')`
+        11. **Multi-line code only**: Use `\n` for newlines. Never use semicolons in Python code.
+        12. **URL extraction**: Use `run_python_tool` to print ONLY the URL string, then pass "<last_result>" to `download_file_tool`.
+
+        **Example for CSV quizzes:**
+        ```python
+        import pandas as pd
+        df = pd.read_csv('data.csv', header=None)
+        print('Data preview:')
+        print(df.head())
+        print('Columns:', df.columns)
+        df[0] = pd.to_numeric(df[0], errors='coerce')
+        cutoff = 4122
+        filtered = df[df[0] > cutoff]
+        result = filtered[0].sum()  # SUM, not count!
+        print(result)
+        '''
+        **Respond *only* with the JSON. No other text.**
+    """ 
     user_prompt = f"""
-    Here is the quiz text from {current_task_url}:
-    ---
-    {scraped_text}
-    ---
-    """
-    
+Here is the quiz text from {current_task_url}:
+---
+{scraped_text}
+---
+"""
+
     if previous_error:
         user_prompt += f"""
-        ATTENTION: Your last attempt to generate a plan for this task failed.
-        The error was: {previous_error}
-        Please analyze this error and the quiz text, and provide a new, corrected JSON plan.
-        """
+ATTENTION: Your last attempt to generate a plan for this task failed.
+The error was: {previous_error}
+Please analyze this error and the quiz text, and provide a new, corrected JSON plan.
+"""
     else:
         user_prompt += "Please provide the JSON plan to solve this quiz."
 
+    prompt = f"""
+SYSTEM:
+{system_prompt}
+
+USER:
+{user_prompt}
+"""
 
     print("\n[Brain]: Calling LLM to get a plan...")
+
     try:
-        response = llm_client.chat.completions.create(
-            model="gpt-3.5-turbo", 
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt}
-            ],
-            response_format={"type": "json_object"}
-        )
-        
-        plan_json = response.choices[0].message.content
+        response = llm_client.generate_content(prompt)
+        plan_json = response.text
         print(f"\n[Brain DEBUG]: Raw JSON response from LLM:\n{plan_json}\n")
 
+        # Strip markdown code blocks if present
+        plan_json = plan_json.strip()
+        if plan_json.startswith("```json"):
+            plan_json = plan_json[7:]  # Remove ```json
+        if plan_json.startswith("```"):
+            plan_json = plan_json[3:]   # Remove ```
+        if plan_json.endswith("```"):
+            plan_json = plan_json[:-3]  # Remove ```
+        plan_json = plan_json.strip()
+    
+        print(f"[Brain DEBUG]: Cleaned JSON:\n{plan_json}\n")
+
+    
         plan_data = json.loads(plan_json)
-        raw_tool_calls = [] 
+
+        # Extract tool calls from response
+        raw_tool_calls = []
 
         if isinstance(plan_data, list):
             print("[Brain DEBUG]: Received plan as a direct list.")
@@ -330,6 +365,7 @@ def call_llm_brain(scraped_text: str, current_task_url: str, email: str, secret:
         else:
             raise ValueError("LLM response was not a JSON list or a dict.")
 
+        # Normalize tool calls
         plan = [] 
         for tool_call in raw_tool_calls:
             if not isinstance(tool_call, dict):
@@ -345,6 +381,12 @@ def call_llm_brain(scraped_text: str, current_task_url: str, email: str, secret:
             elif "tool" in tool_call and "args" in tool_call:
                 tool_name = tool_call["tool"]
                 tool_args = tool_call["args"]
+            elif "tool_code" in tool_call and "parameters" in tool_call:
+                tool_name = tool_call["tool_code"]
+                tool_args = tool_call["parameters"]
+            elif "tool_code" in tool_call and "args" in tool_call:
+                tool_name = tool_call["tool_code"]
+                tool_args = tool_call["args"]    
             if tool_name and tool_args is not None:
                 plan.append({"tool": tool_name, "args": tool_args})
             else:
@@ -412,15 +454,20 @@ def solve_quiz_in_background(task_url: str, email: str, secret: str):
                             if isinstance(data, dict):
                                 if "answer" in data and data["answer"] == "<last_result>":
                                     converted_answer = last_tool_output
-                                    try: converted_answer = int(last_tool_output)
+                                    try: 
+                                        converted_answer = int(last_tool_output)
                                     except (ValueError, TypeError):
-                                        try: converted_answer = float(last_tool_output)
-                                        except (ValueError, TypeError): pass
+                                        try: 
+                                            converted_answer = float(last_tool_output)
+                                        except (ValueError, TypeError): 
+                                            pass
                                     print(f"[Agent]: Injected last tool output ({converted_answer}) into final answer")
                                     data["answer"] = converted_answer
-                                for key, value in data.items(): data[key] = inject_last_result(value)
+                                for key, value in data.items(): 
+                                    data[key] = inject_last_result(value)
                             elif isinstance(data, list):
-                                for i, item in enumerate(data): data[i] = inject_last_result(item)
+                                for i, item in enumerate(data): 
+                                    data[i] = inject_last_result(item)
                             elif isinstance(data, str) and data == "<last_result>":
                                 print(f"[Agent]: Injected last tool output into arguments")
                                 return last_tool_output
@@ -512,7 +559,7 @@ def read_root():
 
 # --- 6. Run the Server / Test Mode ---
 
-TEST_MODE = False
+TEST_MODE = False  # SET TO True FOR TESTING
 TEST_URL = "https://tds-llm-analysis.s-anand.net/demo"
 
 if __name__ == "__main__":
@@ -524,7 +571,7 @@ if __name__ == "__main__":
         print(f"Test URL: {TEST_URL}")
         
         if not MY_EMAIL or not MY_SECRET_KEY:
-            print("TEST MODE FAILED: MY_EMAIL or MY_SECRET_KEY not in .env file.")
+            print("TEST MODE FAILED: MY_EMAIL or MY_SECRET_KEY not set.")
         else:
             solve_quiz_in_background(
                 task_url=TEST_URL,
