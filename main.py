@@ -175,6 +175,11 @@ def run_python_tool(code_to_run: str, text_input: str = None) -> str:
         result = stream.getvalue().strip()
         if not result:
             result = "Code executed successfully, but produced no print output."
+
+        # NEW: Only take the last line of output
+        lines = result.split('\n')
+        if lines:
+            result = lines[-1].strip()  # Take only the last line
         
         print(f"[Tool Result]: {result}")
         return result
