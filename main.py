@@ -172,6 +172,13 @@ def run_python_tool(code_to_run: str, text_input: str = None) -> str:
     The code MUST NOT call input() or block. The agent must pass any previous results via the `text_input` variable.
     """
     print(f"[Tool Call]: run_python_tool(code_snippet_length={len(code_to_run)})")
+    
+    # CRITICAL FIX: Unescape newlines that LLM might have double-escaped
+    # The LLM sends \\n instead of \n, so we need to decode it
+    code_to_run = code_to_run.encode().decode('unicode_escape')
+    
+    print(f"[Tool Debug]: Code after unescaping (first 200 chars):\n{code_to_run[:200]}")
+    
     # Safety checks to prevent blocking or dangerous calls
     if "input(" in code_to_run:
         err = "Error: Code attempts to call input(), which is not allowed in automated execution."
@@ -308,27 +315,33 @@ def call_llm_brain(scraped_text: str, current_task_url: str, email: str, secret:
 
     # Strict system prompt that forbids embedding <last_result> inside code strings
     system_prompt = rf"""
-You are an autonomous tool-using agent. You MUST output ONLY valid JSON (no prose).
-You will receive a webpage's text. Produce a JSON list of steps to solve the quiz using the following tools: {TOOLS_DEFINITION}
+You are an autonomous tool-using agent solving quiz challenges. Output ONLY valid JSON (no prose, no markdown).
 
-CRITICAL RULES (follow exactly):
-1) Output must be a valid JSON array (list) of objects. No extra text before/after.
-2) Each step object must use keys: "name" (tool name) and "parameters" (object).
-3) NEVER embed the literal <last_result> inside a code string. Instead, if a step needs previous text as input, use:
-   "text_input": "<last_result>"
-   in the parameters for run_python_tool.
-4) run_python_tool.code_to_run MUST reference text_input (if needed) and MUST print the final JSON answer using json.dumps({...}).
-   Example (valid):
-     {{"name":"run_python_tool","parameters":{{"code_to_run":"import json\\nobj=json.loads(text_input)\\nprint(json.dumps({{'answer':obj['value']}}))","text_input":"<last_result>"}}}}
-5) submit_answer_tool must be the last step and MUST receive its "answer_payload" as a PRE-BUILT JSON string (i.e., the previous run_python_tool should print the exact JSON to submit, then submit_answer_tool should use "<last_result>" for its payload).
-   Example:
-     {{"name":"submit_answer_tool","parameters":{{"submit_url":"https://example/submit","answer_payload":"<last_result>"}}}}
-6) JSON must use double quotes for keys and strings.
-7) Do NOT use input(), do not request human interaction.
-8) Keep Python code short and use json.loads(text_input) or re on text_input. Do not try to re-embed raw HTML or JSON into Python strings.
+Available tools: {TOOLS_DEFINITION}
 
-When you receive previous_error, analyze it and produce a corrected plan.
-Respond with only the JSON array.
+Your user's email is: {email}
+Your user's secret is: {secret}
+
+CRITICAL RULES:
+1) Output must be a JSON array of step objects. Each step: {{"name": "tool_name", "parameters": {{...}}}}
+2) For run_python_tool, use \\n for newlines in code_to_run (double backslash n).
+3) To pass previous results to Python code, use: "text_input": "<last_result>"
+4) Python code MUST print output using print(). Use json.dumps() for JSON output.
+5) submit_answer_tool must be the LAST step. It needs:
+   - "submit_url": the submission endpoint
+   - "answer_payload": "<last_result>" (pass the JSON from previous step)
+6) The quiz page tells you what to submit. Read it carefully and construct the answer JSON with the user's email and secret.
+7) Keep it simple: usually just read_web_page_tool → run_python_tool (build answer JSON) → submit_answer_tool
+
+Example for a simple quiz asking for any answer:
+[
+  {{"name":"read_web_page_tool","parameters":{{"url":"{current_task_url}"}}}},
+  {{"name":"run_python_tool","parameters":{{"code_to_run":"import json\\nimport re\\n\\n# Extract submission URL from page text\\nsubmit_url = re.search(r'POST.*?(https://[^\\s]+)', text_input).group(1)\\n\\n# Build answer JSON\\nanswer = {{\\n    'email': '{email}',\\n    'secret': '{secret}',\\n    'url': submit_url,\\n    'answer': 'demo answer'\\n}}\\nprint(json.dumps(answer))","text_input":"<last_result>"}}}},
+  {{"name":"submit_answer_tool","parameters":{{"submit_url":"<EXTRACT_FROM_PAGE>","answer_payload":"<last_result>"}}}}
+]
+
+When you see previous_error, fix the issue and output a corrected plan.
+Output ONLY the JSON array, nothing else.
 """
 
     user_prompt = f"Here is the quiz text from {current_task_url}:\n---\n{scraped_text}\n---\n"
@@ -518,19 +531,24 @@ def solve_quiz_in_background(task_url: str, email: str, secret: str):
                                 new_url = submit_response.get("url")
                                 if new_url:
                                     if submit_response.get("correct") is True:
-                                        print(f"[Agent]: CORRECT! Received new quiz URL: {new_url}")
+                                        print(f"[Agent]: ✓ CORRECT! Received new quiz URL: {new_url}")
                                     else:
                                         reason = submit_response.get("reason", "No reason given.")
-                                        print(f"[Agent]: Answer incorrect (Reason: {reason}), but a new URL was provided. Proceeding to: {new_url}")
+                                        print(f"[Agent]: ✗ Answer incorrect (Reason: {reason}), but a new URL was provided. Proceeding to: {new_url}")
                                     current_task_url = new_url
                                 else:
                                     reason = submit_response.get("reason", "No reason given.")
-                                    print(f"[Agent]: Submission response had no new URL (Reason: {reason}). Ending quiz chain.")
+                                    correct = submit_response.get("correct", False)
+                                    if correct:
+                                        print(f"[Agent]: ✓ FINAL ANSWER CORRECT! Quiz chain completed. Response: {submit_response}")
+                                    else:
+                                        print(f"[Agent]: ✗ Submission response had no new URL (Reason: {reason}). Ending quiz chain.")
                                     current_task_url = None
                                 plan_failed = False
                                 break
                             except Exception as e:
                                 print(f"[Agent Error]: Failed to parse submission response: {e}")
+                                print(f"[Agent Debug]: Raw response was: {result}")
                                 last_error = f"Step {i+1} ({tool_name}) failed to parse response: {e}"
                                 plan_failed = True
                                 break
