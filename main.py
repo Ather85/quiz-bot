@@ -342,12 +342,14 @@ CRITICAL RULES:
    - Always check if re.search() returns None before calling .group(1)
    - Use try/except around regex extractions
 
-Example for Quiz #2 (scraping data):
+Example for Quiz #2 (scraping data from plain text):
 [
   {{"name":"read_web_page_tool","parameters":{{"url":"https://tds-llm-analysis.s-anand.net/demo-scrape-data?email=24f1000999%40ds.study.iitm.ac.in"}}}},
-  {{"name":"run_python_tool","parameters":{{"code_to_run":"import json\\nimport re\\n\\n# Extract secret code flexibly\\nmatch = re.search(r'[Ss]ecret.*?is\\s+(\\\\d+)', text_input)\\nif not match:\\n    match = re.search(r'[Ss]ecret.*?(\\\\d+)', text_input)\\nif not match:\\n    secret_code = 'unknown'\\nelse:\\n    secret_code = match.group(1)\\n\\n# Build answer JSON\\nanswer = {{\\n    'email': '{email}',\\n    'secret': '{secret}',\\n    'url': '{current_task_url}',\\n    'answer': secret_code\\n}}\\nprint(json.dumps(answer))","text_input":"<last_result>"}}}},
+  {{"name":"run_python_tool","parameters":{{"code_to_run":"import json\\nimport re\\n\\n# text_input is a plain string like 'Secret code is 4122 and not 5022'\\nmatch = re.search(r'code is (\\\\d+)', text_input)\\nif match:\\n    secret_code = match.group(1)\\nelse:\\n    secret_code = 'unknown'\\n\\nanswer = {{\\n    'email': '{email}',\\n    'secret': '{secret}',\\n    'url': '{current_task_url}',\\n    'answer': secret_code\\n}}\\nprint(json.dumps(answer))","text_input":"<last_result>"}}}},
   {{"name":"submit_answer_tool","parameters":{{"submit_url":"https://tds-llm-analysis.s-anand.net/submit","answer_payload":"<last_result>"}}}}
 ]
+
+CRITICAL: text_input is ALWAYS a plain string, NEVER try to parse it as JSON with json.loads()! Just use regex directly on the string.
 
 When you see previous_error, fix the issue and output a corrected plan.
 Output ONLY the JSON array, nothing else.
