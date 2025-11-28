@@ -10,8 +10,6 @@ import re
 import traceback
 from urllib.parse import urljoin
 
-from dotenv import load_dotenv
-
 # FastAPI imports
 from fastapi import FastAPI, Request, HTTPException, BackgroundTasks
 from pydantic import BaseModel, HttpUrl
@@ -28,22 +26,20 @@ from webdriver_manager.chrome import ChromeDriverManager
 # --- OpenAI Import ---
 from openai import OpenAI
 
-# --- 1. Load Configuration ---
-load_dotenv(override=True, dotenv_path='.env')
-
+# --- 1. Load Configuration from Environment Variables ---
 print("=" * 60)
 print("DEBUG: Checking Environment Variables")
 print("=" * 60)
-print(f"Current working directory: {os.getcwd()}")
-print(f".env file exists here: {os.path.exists('.env')}")
 
+# Get from GitHub secrets (set in Render environment)
 MY_SECRET_KEY = os.getenv("MY_SECRET_KEY")
 MY_EMAIL = os.getenv("MY_EMAIL")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")  # Changed from ATPES_API_KEY
 MODEL_NAME = os.getenv("MODEL", "gpt-4o")
 
 print(f"OPENAI_API_KEY present: {bool(OPENAI_API_KEY)}")
 print(f"MY_EMAIL present: {bool(MY_EMAIL)}")
+print(f"MY_SECRET_KEY present: {bool(MY_SECRET_KEY)}")
 print(f"MODEL_NAME: {MODEL_NAME}")
 print("=" * 60)
 
@@ -541,7 +537,7 @@ if __name__ == "__main__":
         print(f"--- STARTING IN TEST MODE ---")
         print(f"Test URL: {TEST_URL}")
         if not MY_EMAIL or not MY_SECRET_KEY:
-            print("TEST MODE FAILED: MY_EMAIL or MY_SECRET_KEY not in .env file.")
+            print("TEST MODE FAILED: MY_EMAIL or MY_SECRET_KEY not set.")
         else:
             solve_quiz_in_background(
                 task_url=TEST_URL,
