@@ -14,3 +14,4 @@ selenium
 undetected-chromedriver
 webdriver-manager
 groq
+openai
