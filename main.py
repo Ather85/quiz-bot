@@ -238,7 +238,7 @@ def submit_answer_tool(submit_url: str, answer_payload) -> str:
         return f"Error: Answer submission failed. {e}"
 
 # --- Tool Definitions for the LLM (safe instructions) ---
-TOOLS_DEFINITION = r```
+TOOLS_DEFINITION = """
 [
   {
     "name": "read_web_page_tool",
@@ -271,10 +271,10 @@ TOOLS_DEFINITION = r```
   },
   {
     "name": "run_python_tool",
-    "description": "Executes Python code using text_input injected from the previous step. Use text_input='\"<last_result>\"' when needed.",
+    "description": "Executes Python code using text_input injected from the previous step. Use text_input='<last_result>' when needed.",
     "parameters": {
       "code_to_run": "The Python code to execute.",
-      "text_input": "(Optional) Use \"<last_result>\" to pass previous output."
+      "text_input": "(Optional) Use '<last_result>' to pass previous output."
     }
   },
   {
@@ -286,7 +286,7 @@ TOOLS_DEFINITION = r```
     }
   }
 ]
-```
+"""
 
 
 # Map tool names to implementations
@@ -319,10 +319,10 @@ CRITICAL RULES (follow exactly):
    in the parameters for run_python_tool.
 4) run_python_tool.code_to_run MUST reference text_input (if needed) and MUST print the final JSON answer using json.dumps({...}).
    Example (valid):
-     {"name":"run_python_tool","parameters":{"code_to_run":"import json\\nobj=json.loads(text_input)\\nprint(json.dumps({'answer':obj['value']}))","text_input":"<last_result>"}}
+     {{"name":"run_python_tool","parameters":{{"code_to_run":"import json\\nobj=json.loads(text_input)\\nprint(json.dumps({{'answer':obj['value']}}))","text_input":"<last_result>"}}}}
 5) submit_answer_tool must be the last step and MUST receive its "answer_payload" as a PRE-BUILT JSON string (i.e., the previous run_python_tool should print the exact JSON to submit, then submit_answer_tool should use "<last_result>" for its payload).
    Example:
-     {"name":"submit_answer_tool","parameters":{"submit_url":"https://example/submit","answer_payload":"<last_result>"}}
+     {{"name":"submit_answer_tool","parameters":{{"submit_url":"https://example/submit","answer_payload":"<last_result>"}}}}
 6) JSON must use double quotes for keys and strings.
 7) Do NOT use input(), do not request human interaction.
 8) Keep Python code short and use json.loads(text_input) or re on text_input. Do not try to re-embed raw HTML or JSON into Python strings.
