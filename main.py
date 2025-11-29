@@ -299,6 +299,7 @@ def call_llm_brain(scraped_text: str, current_task_url: str, email: str, secret:
         - Print ONLY the final number: `print(result)`
         - Do NOT print debug info like df.head() in the final answer
         18. **EMAIL FORMAT**: Always use the exact email parameter "{email}", don't modify it to "your+email"
+        19. **SUBMISSION URL FIX**: ALL submissions must go to "https://tds-llm-analysis.s-anand.net/submit", never to quiz page URLs like "project2-uv".
         
         **Example for CSV quizzes:**
         ```python
